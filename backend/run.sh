@@ -12,11 +12,12 @@ echo "=== Multi-Marketplace Arbitrage Engine ==="
 echo ""
 
 # Ensure dependencies are installed
-if ! python -c "import fastapi" 2>/dev/null; then
+PYTHON=$(command -v python3 || command -v python)
+if ! $PYTHON -c "import fastapi" 2>/dev/null; then
     echo "[+] Installing dependencies..."
     pip install -r requirements.txt
 fi
 
 # Run the main entry point
 echo "[+] Starting engine..."
-python main.py
+$PYTHON main.py
