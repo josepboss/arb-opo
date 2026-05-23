@@ -156,10 +156,9 @@ def create_stealth_driver(config: Optional[StealthConfig] = None) -> SeleniumBas
 
     driver = SeleniumBaseDriver(
         browser="chrome",
-        headless2=HEADLESS,          # UC headless mode
-        uc=True,                     # Undetected ChromeDriver
-        agent=config.user_agent,     # User agent
-        chrome_options=chrome_args,  # Chrome arguments list
+        headless2=HEADLESS,
+        uc=True,
+        agent=config.user_agent,
         disable_csp=True,
         page_load_timeout=SELENIUM_TIMEOUT,
     )
