@@ -6,7 +6,6 @@ the overlapping intersection — categories present on 2 or 3 platforms
 are passed through for deep scraping.
 """
 
-import re
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -14,7 +13,8 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from seleniumbase import Driver as SeleniumBaseDriver
 
-from config import PLATFORMS, CATEGORY_URLS, HEADLESS, SELENIUM_TIMEOUT
+from config import PLATFORMS, CATEGORY_URLS
+from stealth import create_stealth_driver as _create_stealth
 from utils.normalize import normalize_game_title, resolve_alias
 
 logger = logging.getLogger(__name__)
@@ -42,17 +42,7 @@ class Category:
 
 def create_driver() -> SeleniumBaseDriver:
     """Create a stealth SeleniumBase driver for scraping."""
-    driver = SeleniumBaseDriver(
-        browser="chrome",
-        headless=HEADLESS,
-        headless2=HEADLESS,
-        uc=True,
-        agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    )
-    driver.set_page_load_timeout(SELENIUM_TIMEOUT)
-    driver.implicitly_wait(5)
-    return driver
+    return _create_stealth()
 
 
 def discover_categories_z2u(driver: SeleniumBaseDriver) -> list[dict]:
