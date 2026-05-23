@@ -1,6 +1,6 @@
 """
-Main entry point — runs the FastAPI dashboard and the scheduled scraper
-concurrently using threading.
+Main entry point — runs the FastAPI dashboard, the scheduled scraper,
+and the proxy refresher concurrently using threading.
 """
 
 import logging
@@ -11,6 +11,7 @@ import uvicorn
 from config import HOST, PORT
 from database import init_db
 from orchestrator import run_full_pipeline, scheduler_worker, get_status
+from proxy_refresher import refresh_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,8 +33,17 @@ def start_dashboard():
 
 
 def main():
-    """Main entry point — init DB, run an initial scrape, then start the server."""
+    """Main entry point — init DB, run initial scrape, proxy refresh, then serve."""
     init_db()
+
+    # Start proxy refresher (downloads + verifies free proxies every 15 min)
+    logger.info("Starting proxy refresher...")
+    proxy_thread = threading.Thread(target=refresh_loop, daemon=True)
+    proxy_thread.start()
+
+    # Wait a moment for the proxy pool to have at least a few working proxies
+    import time
+    time.sleep(3)
 
     # Run an initial scrape in a background thread
     logger.info("Running initial scrape...")

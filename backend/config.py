@@ -63,3 +63,17 @@ TOP_N_PRODUCTS = int(os.getenv("TOP_N_PRODUCTS", "10"))
 
 # ─── Platforms that need Cloudflare bypass ─────────────────────────────────────
 CLOUDFLARE_PLATFORMS = {"z2u", "g2g"}
+
+# ─── Proxy Refresher (gfpcom/free-proxy-list) ──────────────────────────────────
+PROXY_SOURCE_URLS = os.getenv(
+    "PROXY_SOURCE_URLS",
+    "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxies.txt,"
+    "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-http.txt",
+)
+PROXY_REFRESH_INTERVAL = int(os.getenv("PROXY_REFRESH_INTERVAL", "15"))
+MAX_VERIFIED_PROXIES = int(os.getenv("MAX_VERIFIED_PROXIES", "30"))
+PROXY_TEST_TIMEOUT = int(os.getenv("PROXY_TEST_TIMEOUT", "10"))
+PROXY_TEST_WORKERS = int(os.getenv("PROXY_TEST_WORKERS", "20"))
+VERIFIED_PROXIES_PATH = os.getenv(
+    "VERIFIED_PROXIES_PATH", "/app/data/verified_proxies.json"
+)
