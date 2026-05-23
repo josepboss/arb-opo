@@ -137,31 +137,31 @@ def create_stealth_driver(config: Optional[StealthConfig] = None) -> SeleniumBas
     )
 
     chrome_args = [
-            f"--window-size={config.viewport_width},{config.viewport_height}",
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            f"--lang=en-US",
-            "--disable-web-security",
-            "--allow-running-insecure-content",
-            "--disable-features=VizDisplayCompositor",
-            "--disable-software-rasterizer",
-            "--disable-images",
-        ]
-    
-        if HEADLESS:
-            chrome_args.append("--headless=new")
-    
-        driver = SeleniumBaseDriver(
-            browser="chrome",
-            headless=HEADLESS,
-            headless2=HEADLESS,
-            uc=True,
-            agent=config.user_agent,
-            chrome_args=chrome_args,
-            disable_csp=True,
-        )
+        f"--window-size={config.viewport_width},{config.viewport_height}",
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        f"--lang=en-US",
+        "--disable-web-security",
+        "--allow-running-insecure-content",
+        "--disable-features=VizDisplayCompositor",
+        "--disable-software-rasterizer",
+        "--disable-images",
+    ]
+
+    if HEADLESS:
+        chrome_args.append("--headless=new")
+
+    driver = SeleniumBaseDriver(
+        browser="chrome",
+        headless=HEADLESS,
+        headless2=HEADLESS,
+        uc=True,
+        agent=config.user_agent,
+        chrome_args=chrome_args,
+        disable_csp=True,
+    )
 
     driver.set_page_load_timeout(SELENIUM_TIMEOUT)
     driver.implicitly_wait(5)

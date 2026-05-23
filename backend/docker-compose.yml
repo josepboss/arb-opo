@@ -1,6 +1,25 @@
 version: "3.9"
 
 services:
+  # ─── FlareSolverr - Cloudflare bypass proxy ────────────────────────────────
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    ports:
+      - "8191:8191"
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=UTC
+    restart: unless-stopped
+    # Pass proxy env vars through to FlareSolverr if configured
+    # Uncomment and set PROXY_LIST if you want FlareSolverr itself to use proxies:
+    # - BROWSER_PROXY=
+    networks:
+      - arbitrage-net
+
+  # ─── Arbitrage Engine ──────────────────────────────────────────────────────
   arbitrage-engine:
     build:
       context: .
@@ -8,11 +27,29 @@ services:
     container_name: arbitrage-engine
     ports:
       - "2105:2105"
+    depends_on:
+      - flaresolverr
     environment:
+      # Dashboard
       - ARBITRAGE_HOST=0.0.0.0
       - ARBITRAGE_PORT=2105
       - ARBITRAGE_DB_PATH=/app/data/arbitrage.db
+
+      # Schedule
       - SCRAPE_INTERVAL_MINUTES=30
+
+      # FlareSolverr (Docker service name resolves to container IP)
+      - FLARESOLVERR_URL=http://flaresolverr:8191
+      - FLARESOLVERR_TIMEOUT=30
+      - FLARESOLVERR_MAX_RETRIES=3
+
+      # Proxy pool (comma-separated, optional)
+      # Format: http://user:pass@host:port
+      # If empty, FlareSolverr uses its own IP
+      - PROXY_LIST=
+      - PROXY_BLACKLIST_THRESHOLD=3
+
+      # Selenium
       - HEADLESS=true
       - TZ=UTC
     volumes:
@@ -22,6 +59,12 @@ services:
       - SYS_ADMIN
     security_opt:
       - seccomp:unconfined
+    networks:
+      - arbitrage-net
+
+networks:
+  arbitrage-net:
+    driver: bridge
 
 volumes:
   arbitrage_data:

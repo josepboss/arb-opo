@@ -1,19 +1,20 @@
 """
 Phase 2: Stealth Deep-Scraping & Product Normalization
 
-For each qualified overlapping category, perform deep scraping of product listings
-using SeleniumBase in undetected mode with enhanced stealth:
-- Per-platform delay profiles (Cloudflare sites get longer delays)
-- Human-like scroll & mouse simulation
-- Progressive backoff on failure
-- Realistic browser fingerprint randomization per session
+For each qualified overlapping category, scrape product listings using the
+best available method per platform:
+
+  - Z2U, G2G → FlareSolverr (Cloudflare bypass, rotating proxies)
+  - FunPay   → SeleniumBase (direct, no blocking)
+
+Each method falls back to the other on failure.
 """
 
 import logging
 import random
 import re
 import time
-from typing import Optional
+from typing import Optional, Callable
 
 from bs4 import BeautifulSoup
 from seleniumbase import Driver as SeleniumBaseDriver
@@ -26,73 +27,105 @@ from selenium.common.exceptions import (
 from config import (
     HEADLESS, SELENIUM_TIMEOUT, MIN_DELAY, MAX_DELAY,
     PLATFORMS, TOP_N_PRODUCTS, SCRAPE_RETRIES, PAGE_LOAD_WAIT,
+    CLOUDFLARE_PLATFORMS,
 )
+from flaresolverr_client import get_flaresolverr_client, FlareSolverrError
 from utils.pricing import parse_quantity, compute_unit_price, extract_item_type
-from utils.normalize import normalize_game_title, resolve_alias
 from matcher import Category
 from stealth import (
     StealthConfig,
     create_stealth_driver,
     navigate_with_stealth,
     human_delay,
-    simulate_human_scroll,
-    get_platform_delay,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def scrape_z2u_listings(driver: SeleniumBaseDriver, category: Category, retry_count: int = 0) -> list[dict]:
+# ─── CSS Selectors per platform ──────────────────────────────────────────────
+
+PLATFORM_SELECTORS = {
+    "z2u": {
+        "containers": [
+            "[class*='product']", "[class*='listing']", "[class*='item']",
+            ".goods-item", ".product-item", "tr[class*='goods']",
+            "div[class*='card']:has([class*='price'])",
+            "tbody tr", ".list-view > div", "[class*='row']",
+        ],
+        "title": [
+            "a[href*='/goods/']", "a[class*='title']",
+            "[class*='name'] a", "[class*='title'] a", "h3 a", "h4 a",
+            "a[href*='/detail/']", "a",
+        ],
+        "price": [
+            "[class*='price']", ".amount", ".cost",
+            "[class*='money']", "span[class*='usd']", "span[class*='dollar']",
+        ],
+    },
+    "g2g": {
+        "containers": [
+            ".product-card", ".offer-card", ".listing-card",
+            "div[class*='product']", "div[class*='offer']",
+            "div[class*='card']:has([class*='price'])",
+            "div[class*='grid'] > div",
+            ".list-view > div", "[class*='items'] > div",
+        ],
+        "title": [
+            "a[class*='title']", "[class*='name'] a",
+            "h3 a", "h4 a", "[class*='product-title'] a",
+            "a[href]",
+        ],
+        "price": [
+            "[class*='price']", ".amount", ".cost",
+            "[class*='money']", "[data-price]", "span[class*='usd']",
+        ],
+    },
+    "funpay": {
+        "containers": [
+            ".lot-item", ".offer-item", ".listing-item",
+            "tr[class*='lot']", "div[class*='lot']",
+            "div[class*='offer']", "[class*='product']",
+            "tbody tr", ".table > div", ".items-list > div",
+        ],
+        "title": [
+            "a[class*='title']", ".lot-title a", ".item-title a",
+            "h3 a", "h4 a", "[class*='name'] a", "a",
+        ],
+        "price": [
+            "[class*='price']", ".amount", ".cost",
+            "span[class*='money']", "[class*='usd']",
+        ],
+    },
+}
+
+
+# ─── HTML parsing helper ─────────────────────────────────────────────────────
+
+
+def _extract_listings_from_html(
+    html: str,
+    platform: str,
+    limit: int = 50,
+) -> list[dict]:
     """
-    Scrape product listings from Z2U for a given category.
-    Uses stealth navigation with Cloudflare-appropriate delays.
+    Parse product listings from raw HTML using platform-specific CSS selectors.
+    Shared between FlareSolverr and Selenium code paths.
     """
-    logger.info("Scraping Z2U category: %s (%s)", category.name, category.url)
+    selectors = PLATFORM_SELECTORS.get(platform, PLATFORM_SELECTORS["z2u"])
+    soup = BeautifulSoup(html, "html.parser")
 
-    # Use enhanced stealth navigation
-    navigate_with_stealth(driver, category.url, "z2u", extra_delay=retry_count * 2)
+    # Build selector string
+    container_selector = ", ".join(selectors["containers"])
+    title_selector = ", ".join(selectors["title"])
+    price_selector = ", ".join(selectors["price"])
 
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-
-    # Check for Cloudflare challenge page
-    if "challenge" in driver.page_source.lower() or "cf-browser-verification" in driver.page_source:
-        logger.warning("Cloudflare challenge detected on Z2U. Retrying with longer delay...")
-        if retry_count < SCRAPE_RETRIES:
-            extra_wait = 5 * (retry_count + 1)
-            logger.info("Waiting %d seconds before retry %d/%d...", extra_wait, retry_count + 1, SCRAPE_RETRIES)
-            time.sleep(extra_wait)
-            # Refresh with new stealth config
-            return scrape_z2u_listings(driver, category, retry_count + 1)
-        else:
-            logger.error("Max retries reached for Z2U category: %s", category.name)
-            return []
+    item_cards = soup.select(container_selector)
+    logger.debug("Found %d potential item containers on %s", len(item_cards), platform)
 
     listings = []
-    item_cards = soup.select(
-        "[class*='product'], [class*='listing'], [class*='item'], "
-        ".goods-item, .product-item, tr[class*='goods'], "
-        "div[class*='card']:has([class*='price'])"
-    )
-
-    if not item_cards:
-        item_cards = soup.select("tbody tr, .list-view > div, [class*='row']")
-
-    logger.debug("Found %d potential item containers on Z2U", len(item_cards))
-
-    for card in item_cards[:50]:
-        title_el = card.select_one(
-            "a[href*='/goods/'], a[class*='title'], "
-            "[class*='name'] a, [class*='title'] a, h3 a, h4 a, "
-            "a[href*='/detail/']"
-        )
-        if not title_el:
-            title_el = card.select_one("a")
-
-        price_el = card.select_one(
-            "[class*='price'], .amount, .cost, "
-            "[class*='money'], span[class*='usd'], span[class*='dollar']"
-        )
-
+    for card in item_cards[:limit]:
+        title_el = card.select_one(title_selector)
+        price_el = card.select_one(price_selector)
         url_el = title_el if title_el else card.select_one("a[href]")
 
         title = title_el.get_text(strip=True) if title_el else ""
@@ -107,150 +140,117 @@ def scrape_z2u_listings(driver: SeleniumBaseDriver, category: Category, retry_co
             continue
 
         if url and not url.startswith("http"):
-            url = f"{PLATFORMS['z2u']}{url}"
+            url = f"{PLATFORMS[platform]}{url}"
 
         listings.append({"title": title, "price_usd": price, "url": url})
 
-    logger.info("Scraped %d listings from Z2U / %s", len(listings), category.name)
     return listings
 
 
-def scrape_funpay_listings(driver: SeleniumBaseDriver, category: Category, retry_count: int = 0) -> list[dict]:
+# ─── FlareSolverr-based listing scraping (Z2U, G2G) ──────────────────────────
+
+
+def _scrape_via_flaresolverr(
+    category: Category,
+    platform: str,
+) -> list[dict]:
     """
-    Scrape product listings from FunPay for a given category.
+    Scrape product listings via FlareSolverr.
+    Retries with different proxies, then falls back to Selenium.
     """
-    logger.info("Scraping FunPay category: %s (%s)", category.name, category.url)
-    navigate_with_stealth(driver, category.url, "funpay", extra_delay=retry_count * 1.5)
+    logger.info("Scraping %s category via FlareSolverr: %s", platform, category.name)
 
-    soup = BeautifulSoup(driver.page_source, "html.parser")
+    # Try FlareSolverr
+    client = get_flaresolverr_client()
+    if client.is_available():
+        try:
+            html = client.fetch_html(
+                category.url,
+                platform=platform,
+                use_proxy=True,
+                session_ttl_minutes=3,
+            )
+            if html:
+                # Check if FlareSolverr returned a challenge page
+                if "challenge" in html.lower()[:2000]:
+                    logger.warning("FlareSolverr returned challenge page for %s. May need proxy refresh.", platform)
+                else:
+                    listings = _extract_listings_from_html(html, platform)
+                    logger.info(
+                        "FlareSolverr returned %d listings from %s / %s",
+                        len(listings), platform, category.name,
+                    )
+                    return listings
+        except (FlareSolverrError, Exception) as e:
+            logger.warning("FlareSolverr failed for %s / %s: %s", platform, category.name, e)
+    else:
+        logger.warning("FlareSolverr not available for %s / %s", platform, category.name)
 
-    if "challenge" in driver.page_source.lower() or "cf-browser-verification" in driver.page_source:
-        logger.warning("Cloudflare challenge detected on FunPay. Retrying...")
-        if retry_count < SCRAPE_RETRIES:
-            extra_wait = 5 * (retry_count + 1)
-            time.sleep(extra_wait)
-            return scrape_funpay_listings(driver, category, retry_count + 1)
-        else:
-            logger.error("Max retries reached for FunPay category: %s", category.name)
-            return []
+    # Fallback: Selenium
+    logger.info("Falling back to Selenium for %s / %s...", platform, category.name)
+    return _scrape_via_selenium(category, platform)
 
-    listings = []
-    item_cards = soup.select(
-        ".lot-item, .offer-item, .listing-item, "
-        "tr[class*='lot'], div[class*='lot'], "
-        "div[class*='offer'], [class*='product']"
+
+# ─── Selenium-based listing scraping (FunPay + fallback) ─────────────────────
+
+
+def _scrape_via_selenium(
+    category: Category,
+    platform: str,
+    retry_count: int = 0,
+) -> list[dict]:
+    """
+    Scrape product listings using SeleniumBase in undetected mode.
+    Primary method for FunPay; fallback for Z2U/G2G.
+    """
+    logger.info(
+        "Scraping %s via Selenium%s: %s",
+        platform,
+        f" (retry {retry_count}/{SCRAPE_RETRIES})" if retry_count > 0 else "",
+        category.name,
     )
 
-    if not item_cards:
-        item_cards = soup.select("tbody tr, .table > div, .items-list > div")
+    driver = create_stealth_driver(StealthConfig())
+    try:
+        navigate_with_stealth(driver, category.url, platform, extra_delay=retry_count * 2)
 
-    logger.debug("Found %d potential item containers on FunPay", len(item_cards))
+        html = driver.page_source
 
-    for card in item_cards[:50]:
-        title_el = card.select_one(
-            "a[class*='title'], .lot-title a, .item-title a, "
-            "h3 a, h4 a, [class*='name'] a"
-        )
-        if not title_el:
-            title_el = card.select_one("a")
+        # Check for Cloudflare challenge
+        if _is_cloudflare_challenge(html):
+            if retry_count < SCRAPE_RETRIES:
+                wait = 5 * (retry_count + 1)
+                logger.warning("Cloudflare on %s. Waiting %ds before retry %d/%d...",
+                               platform, wait, retry_count + 1, SCRAPE_RETRIES)
+                time.sleep(wait)
+                return _scrape_via_selenium(category, platform, retry_count + 1)
+            else:
+                logger.error("Max Selenium retries for %s / %s", platform, category.name)
+                return []
 
-        price_el = card.select_one(
-            "[class*='price'], .amount, .cost, "
-            "span[class*='money'], [class*='usd']"
-        )
+        listings = _extract_listings_from_html(html, platform)
+        logger.info("Selenium returned %d listings from %s / %s",
+                    len(listings), platform, category.name)
+        return listings
 
-        url_el = title_el if title_el else card.select_one("a[href]")
-
-        title = title_el.get_text(strip=True) if title_el else ""
-        price_text = price_el.get_text(strip=True) if price_el else ""
-        url = url_el.get("href", "") if url_el else ""
-
-        if not title or not price_text:
-            continue
-
-        price = parse_price_text(price_text)
-        if price is None:
-            continue
-
-        if url and not url.startswith("http"):
-            url = f"{PLATFORMS['funpay']}{url}"
-
-        listings.append({"title": title, "price_usd": price, "url": url})
-
-    logger.info("Scraped %d listings from FunPay / %s", len(listings), category.name)
-    return listings
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
 
-def scrape_g2g_listings(driver: SeleniumBaseDriver, category: Category, retry_count: int = 0) -> list[dict]:
-    """
-    Scrape product listings from G2G for a given category.
-    G2G has the most aggressive protection (Cloudflare + Qrator), so delays are longest.
-    """
-    logger.info("Scraping G2G category: %s (%s)", category.name, category.url)
-    navigate_with_stealth(driver, category.url, "g2g", extra_delay=retry_count * 3)
-
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-
-    if "challenge" in driver.page_source.lower() or "cf-browser-verification" in driver.page_source:
-        logger.warning("Cloudflare challenge detected on G2G. Retrying with longer delay...")
-        if retry_count < SCRAPE_RETRIES:
-            extra_wait = 8 * (retry_count + 1)
-            logger.info("Waiting %d seconds before retry %d/%d...", extra_wait, retry_count + 1, SCRAPE_RETRIES)
-            time.sleep(extra_wait)
-            return scrape_g2g_listings(driver, category, retry_count + 1)
-        else:
-            logger.error("Max retries reached for G2G category: %s", category.name)
-            return []
-
-    listings = []
-    item_cards = soup.select(
-        ".product-card, .offer-card, .listing-card, "
-        "div[class*='product'], div[class*='offer'], "
-        "div[class*='card']:has([class*='price'])"
+def _is_cloudflare_challenge(html: str) -> bool:
+    """Check if HTML looks like a Cloudflare challenge page."""
+    lower = html.lower()
+    return (
+        "challenge" in lower[:3000] or
+        "cf-browser-verification" in lower[:3000] or
+        "just a moment" in lower[:2000]
     )
 
-    if not item_cards:
-        item_cards = soup.select(
-            "div[class*='grid'] > div, "
-            ".list-view > div, [class*='items'] > div"
-        )
 
-    logger.debug("Found %d potential item containers on G2G", len(item_cards))
-
-    for card in item_cards[:50]:
-        title_el = card.select_one(
-            "a[class*='title'], [class*='name'] a, "
-            "h3 a, h4 a, [class*='product-title'] a"
-        )
-        if not title_el:
-            title_el = card.select_one("a[href]")
-
-        price_el = card.select_one(
-            "[class*='price'], .amount, .cost, "
-            "[class*='money'], [data-price], "
-            "span[class*='usd']"
-        )
-
-        url_el = title_el if title_el else card.select_one("a[href]")
-
-        title = title_el.get_text(strip=True) if title_el else ""
-        price_text = price_el.get_text(strip=True) if price_el else ""
-        url = url_el.get("href", "") if url_el else ""
-
-        if not title or not price_text:
-            continue
-
-        price = parse_price_text(price_text)
-        if price is None:
-            continue
-
-        if url and not url.startswith("http"):
-            url = f"{PLATFORMS['g2g']}{url}"
-
-        listings.append({"title": title, "price_usd": price, "url": url})
-
-    logger.info("Scraped %d listings from G2G / %s", len(listings), category.name)
-    return listings
+# ─── Price parsing ───────────────────────────────────────────────────────────
 
 
 def parse_price_text(price_text: str) -> Optional[float]:
@@ -266,18 +266,23 @@ def parse_price_text(price_text: str) -> Optional[float]:
         return None
 
 
+# ─── Platform router ─────────────────────────────────────────────────────────
+
+
 def scrape_category(driver: SeleniumBaseDriver, category: Category, platform: str) -> list[dict]:
-    """Route scraping to the correct platform-specific function."""
-    scrapers = {
-        "z2u": scrape_z2u_listings,
-        "funpay": scrape_funpay_listings,
-        "g2g": scrape_g2g_listings,
-    }
-    scraper_fn = scrapers.get(platform)
-    if not scraper_fn:
-        logger.warning("Unknown platform: %s", platform)
-        return []
-    return scraper_fn(driver, category)
+    """
+    Route scraping to the correct method per platform.
+
+    Note: 'driver' param is kept for interface compatibility with the orchestrator.
+    Z2U/G2G ignore it and use FlareSolverr; FunPay uses it.
+    """
+    if platform in CLOUDFLARE_PLATFORMS:
+        return _scrape_via_flaresolverr(category, platform)
+    else:
+        return _scrape_via_selenium(category, platform)
+
+
+# ─── Listing processing ──────────────────────────────────────────────────────
 
 
 def process_listings(
@@ -308,10 +313,17 @@ def process_listings(
     return processed
 
 
-def deep_scrape_categories(qualified_categories: list[tuple[str, int, list[Category]]]) -> list[dict]:
+# ─── Deep scrape orchestrator ────────────────────────────────────────────────
+
+
+def deep_scrape_categories(
+    qualified_categories: list[tuple[str, int, list[Category]]],
+) -> list[dict]:
     """
-    Perform deep scraping for all qualified overlapping categories
-    with fresh driver per category group for stealth rotation.
+    Perform deep scraping for all qualified overlapping categories.
+
+    Z2U/G2G categories are scraped via FlareSolverr (no Selenium driver needed).
+    FunPay categories use Selenium (requires driver creation inside the loop).
     """
     all_products = []
 
@@ -319,30 +331,47 @@ def deep_scrape_categories(qualified_categories: list[tuple[str, int, list[Categ
         logger.info("=== Deep scraping category: %s (on %d platforms) ===",
                     norm_name, platform_count)
 
-        # Use a fresh driver per category group for stealth rotation
-        driver = create_stealth_driver(StealthConfig())
+        # Separate cloudflare vs direct platforms
+        flare_cats = [c for c in categories if c.platform in CLOUDFLARE_PLATFORMS]
+        direct_cats = [c for c in categories if c.platform not in CLOUDFLARE_PLATFORMS]
 
-        try:
-            for cat in categories:
-                try:
-                    human_delay(1.0, 2.0)
-                    raw = scrape_category(driver, cat, cat.platform)
-                    processed = process_listings(raw, cat.platform, norm_name)
-                    all_products.extend(processed)
-                    logger.info("Scraped %d products from %s / %s",
-                                len(processed), cat.platform, cat.name)
-                except (TimeoutException, WebDriverException) as e:
-                    logger.error("Error scraping %s / %s: %s",
-                                 cat.platform, cat.name, e)
-                    continue
-        finally:
+        # FlareSolverr categories (Z2U, G2G) — no Selenium driver needed
+        for cat in flare_cats:
             try:
-                driver.quit()
-            except Exception:
-                pass
+                human_delay(1.0, 2.5)
+                raw = _scrape_via_flaresolverr(cat, cat.platform)
+                processed = process_listings(raw, cat.platform, norm_name)
+                all_products.extend(processed)
+                logger.info("Scraped %d products from %s / %s",
+                            len(processed), cat.platform, cat.name)
+            except Exception as e:
+                logger.error("Error scraping %s / %s: %s", cat.platform, cat.name, e)
+                continue
 
-        # Long inter-category delay to avoid rate limiting
-                human_delay(3.0, 6.0)
+        # Direct Selenium categories (FunPay)
+        if direct_cats:
+            driver = create_stealth_driver(StealthConfig())
+            try:
+                for cat in direct_cats:
+                    try:
+                        human_delay(1.0, 2.0)
+                        raw = _scrape_via_selenium(cat, cat.platform)
+                        processed = process_listings(raw, cat.platform, norm_name)
+                        all_products.extend(processed)
+                        logger.info("Scraped %d products from %s / %s",
+                                    len(processed), cat.platform, cat.name)
+                    except Exception as e:
+                        logger.error("Error scraping %s / %s: %s",
+                                     cat.platform, cat.name, e)
+                        continue
+            finally:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
-    logger.info("Deep scrape complete. Total raw products: %d", len(all_products))
+        # Inter-category delay
+        human_delay(2.0, 5.0)
+
+    logger.info("Deep scrape complete. Total products: %d", len(all_products))
     return all_products

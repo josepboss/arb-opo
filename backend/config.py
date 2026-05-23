@@ -16,17 +16,34 @@ PORT = int(os.getenv("ARBITRAGE_PORT", "2105"))
 # ─── Scraping schedule ─────────────────────────────────────────────────────────
 SCRAPE_INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "30"))
 
-# ─── Selenium base config ──────────────────────────────────────────────────────
+# ─── Selenium base config (used for FunPay + FlareSolverr fallback) ────────────
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 SELENIUM_TIMEOUT = int(os.getenv("SELENIUM_TIMEOUT", "45"))
 PAGE_LOAD_WAIT = int(os.getenv("PAGE_LOAD_WAIT", "15"))
 
-# ─── Cloudflare challenge retries ──────────────────────────────────────────────
+# ─── Legacy Cloudflare retries (Selenium fallback only) ────────────────────────
 SCRAPE_RETRIES = int(os.getenv("SCRAPE_RETRIES", "3"))
 
-# ─── Human-like delay defaults (fallback; per-platform overrides in stealth.py) ─
+# ─── Human-like delay defaults ─────────────────────────────────────────────────
 MIN_DELAY = float(os.getenv("MIN_DELAY", "1.5"))
 MAX_DELAY = float(os.getenv("MAX_DELAY", "4.0"))
+
+# ─── FlareSolverr ──────────────────────────────────────────────────────────────
+FLARESOLVERR_URL = os.getenv(
+    "FLARESOLVERR_URL",
+    "http://flaresolverr:8191",  # Docker service name
+)
+FLARESOLVERR_TIMEOUT = int(os.getenv("FLARESOLVERR_TIMEOUT", "30"))
+FLARESOLVERR_MAX_RETRIES = int(os.getenv("FLARESOLVERR_MAX_RETRIES", "3"))
+
+# ─── Proxy Pool ────────────────────────────────────────────────────────────────
+# Comma-separated list of proxy URLs in format: http://user:pass@host:port
+# Example: "http://proxy1:8080,http://user:pass@proxy2:3128,socks5://proxy3:1080"
+# If empty/FALSE, FlareSolverr will use its own outbound IP (no proxy).
+PROXY_LIST = os.getenv("PROXY_LIST", "")
+
+# Number of failures before a proxy is blacklisted
+PROXY_BLACKLIST_THRESHOLD = int(os.getenv("PROXY_BLACKLIST_THRESHOLD", "3"))
 
 # ─── Platform base URLs ────────────────────────────────────────────────────────
 PLATFORMS = {
@@ -41,8 +58,8 @@ CATEGORY_URLS = {
     "g2g": f"{PLATFORMS['g2g']}/categories",
 }
 
-# ─── Proxy (optional) ──────────────────────────────────────────────────────────
-PROXY = os.getenv("ARBITRAGE_PROXY", None)
-
 # ─── Output limits ─────────────────────────────────────────────────────────────
 TOP_N_PRODUCTS = int(os.getenv("TOP_N_PRODUCTS", "10"))
+
+# ─── Platforms that need Cloudflare bypass ─────────────────────────────────────
+CLOUDFLARE_PLATFORMS = {"z2u", "g2g"}

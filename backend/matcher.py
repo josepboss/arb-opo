@@ -4,20 +4,30 @@ Phase 1: Category Mapping & Intersection Filter
 Discovers categories across Z2U, FunPay, and G2G, then computes
 the overlapping intersection — categories present on 2 or 3 platforms
 are passed through for deep scraping.
+
+Routing:
+  - Z2U  → FlareSolverr (Cloudflare bypass with rotating proxies)
+  - G2G  → FlareSolverr (Cloudflare bypass with rotating proxies)
+  - FunPay → Direct Selenium (no blocking observed)
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from bs4 import BeautifulSoup
 from seleniumbase import Driver as SeleniumBaseDriver
 
-from config import PLATFORMS, CATEGORY_URLS
+from config import PLATFORMS, CATEGORY_URLS, CLOUDFLARE_PLATFORMS
+from flaresolverr_client import get_flaresolverr_client, FlareSolverrError
 from stealth import create_stealth_driver as _create_stealth
 from utils.normalize import normalize_game_title, resolve_alias
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Category data model ──────────────────────────────────────────────────────
 
 
 @dataclass
@@ -40,91 +50,143 @@ class Category:
         return NotImplemented
 
 
+# ─── Driver creation (used only for FunPay) ───────────────────────────────────
+
+
 def create_driver() -> SeleniumBaseDriver:
-    """Create a stealth SeleniumBase driver for scraping."""
+    """Create a stealth SeleniumBase driver (used for FunPay scraping)."""
     return _create_stealth()
 
 
-def discover_categories_z2u(driver: SeleniumBaseDriver) -> list[dict]:
+# ─── FlareSolverr-based discovery (Z2U, G2G) ──────────────────────────────────
+
+
+def _discover_via_flaresolverr(platform: str) -> list[dict]:
     """
-    Discover game/service categories from Z2U.
-    Navigate to the categories page and extract links.
+    Discover categories from a Cloudflare-protected platform via FlareSolverr.
+
+    Args:
+        platform: Platform key ('z2u' or 'g2g')
+
+    Returns:
+        List of {"name": str, "url": str} dicts
     """
-    logger.info("Discovering categories from Z2U...")
-    driver.get(CATEGORY_URLS["z2u"])
-    import time
-    time.sleep(2)
+    url = CATEGORY_URLS[platform]
+    logger.info("Discovering categories from %s via FlareSolverr...", platform)
 
-    categories = []
-    soup = BeautifulSoup(driver.page_source, "html.parser")
+    html = _fetch_with_fallback(platform, url)
+    if not html:
+        logger.error("Failed to fetch %s categories (all methods exhausted).", platform)
+        return []
 
-    # Z2U typically has category links in a sidebar or grid
-    # Selectors may need tuning as Z2U updates their layout
-    for link in soup.select("a[href*='/games/'], a[href*='/category/'], "
-                            ".category-item a, .menu-item a, "
-                            "[class*='category'] a[href]"):
-        href = link.get("href", "")
-        text = link.get_text(strip=True)
-        if href and text and len(text) > 2:
-            full_url = href if href.startswith("http") else f"{PLATFORMS['z2u']}{href}"
-            categories.append({"name": text, "url": full_url})
+    soup = BeautifulSoup(html, "html.parser")
+    categories = _extract_categories(soup, platform)
 
-    logger.info("Found %d categories on Z2U", len(categories))
+    logger.info("Found %d categories on %s", len(categories), platform)
     return categories
 
 
-def discover_categories_funpay(driver: SeleniumBaseDriver) -> list[dict]:
+def _fetch_with_fallback(platform: str, url: str) -> Optional[str]:
     """
-    Discover categories from FunPay.
+    Try FlareSolverr first, then fall back to direct Selenium.
+
+    Returns HTML string or None if both fail.
     """
-    logger.info("Discovering categories from FunPay...")
+    # Attempt 1: FlareSolverr
+    try:
+        client = get_flaresolverr_client()
+        if client.is_available():
+            html = client.fetch_html(url, platform=platform, use_proxy=True)
+            if html:
+                return html
+        else:
+            logger.warning("FlareSolverr not available for %s.", platform)
+    except (FlareSolverrError, Exception) as e:
+        logger.warning("FlareSolverr failed for %s: %s. Trying Selenium fallback.", platform, e)
+
+    # Attempt 2: Selenium fallback
+    logger.info("Falling back to Selenium for %s category discovery...", platform)
+    try:
+        driver = _create_stealth()
+        try:
+            driver.get(url)
+            time.sleep(4)
+            # Check for challenge page
+            page_src = driver.page_source.lower()
+            if "challenge" in page_src or "cf-browser-verification" in page_src:
+                logger.warning("Selenium also blocked by Cloudflare on %s.", platform)
+                return None
+            return driver.page_source
+        finally:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error("Selenium fallback failed for %s: %s", platform, e)
+        return None
+
+
+def _extract_categories(soup: BeautifulSoup, platform: str) -> list[dict]:
+    """Extract category links from BeautifulSoup using platform-specific selectors."""
+    selectors = {
+        "z2u": [
+            "a[href*='/games/']", "a[href*='/category/']",
+            ".category-item a", ".menu-item a",
+            "[class*='category'] a[href]",
+        ],
+        "funpay": [
+            "a[href*='/lots/']", ".game-item a",
+            ".sidebar-game a", "[class*='game'] a[href]",
+        ],
+        "g2g": [
+            "a[href*='/category/']", "a[href*='/products/']",
+            ".category-card a", ".nav-link[href*='g2g']",
+            "[class*='category'] a[href]",
+        ],
+    }
+
+    platform_selectors = selectors.get(platform, selectors["z2u"])
+    selector_string = ", ".join(platform_selectors)
+
+    categories = []
+    for link in soup.select(selector_string):
+        href = link.get("href", "")
+        text = link.get_text(strip=True)
+        if href and text and len(text) > 2:
+            full_url = href if href.startswith("http") else f"{PLATFORMS[platform]}{href}"
+            categories.append({"name": text, "url": full_url})
+
+    # Deduplicate by name
+    seen = set()
+    unique = []
+    for cat in categories:
+        if cat["name"].lower() not in seen:
+            seen.add(cat["name"].lower())
+            unique.append(cat)
+
+    return unique
+
+
+# ─── Selenium-based discovery (FunPay only) ───────────────────────────────────
+
+
+def _discover_funpay(driver: SeleniumBaseDriver) -> list[dict]:
+    """Discover categories from FunPay using the Selenium driver."""
+    logger.info("Discovering categories from FunPay via Selenium...")
     driver.get(CATEGORY_URLS["funpay"])
-    import time
     time.sleep(2)
 
-    categories = []
     soup = BeautifulSoup(driver.page_source, "html.parser")
-
-    # FunPay uses a sidebar with game links
-    for link in soup.select("a[href*='/lots/'], .game-item a, "
-                            ".sidebar-game a, [class*='game'] a[href]"):
-        href = link.get("href", "")
-        text = link.get_text(strip=True)
-        if href and text and len(text) > 2:
-            full_url = href if href.startswith("http") else f"{PLATFORMS['funpay']}{href}"
-            categories.append({"name": text, "url": full_url})
-
-    logger.info("Found %d categories on FunPay", len(categories))
-    return categories
+    return _extract_categories(soup, "funpay")
 
 
-def discover_categories_g2g(driver: SeleniumBaseDriver) -> list[dict]:
-    """
-    Discover categories from G2G.
-    """
-    logger.info("Discovering categories from G2G...")
-    driver.get(CATEGORY_URLS["g2g"])
-    import time
-    time.sleep(2)
-
-    categories = []
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-
-    # G2G typically uses mega-menu or category grid
-    for link in soup.select("a[href*='/category/'], a[href*='/products/'], "
-                            ".category-card a, .nav-link[href*='g2g'], "
-                            "[class*='category'] a[href]"):
-        href = link.get("href", "")
-        text = link.get_text(strip=True)
-        if href and text and len(text) > 2:
-            full_url = href if href.startswith("http") else f"{PLATFORMS['g2g']}{href}"
-            categories.append({"name": text, "url": full_url})
-
-    logger.info("Found %d categories on G2G", len(categories))
-    return categories
+# ─── Intersection logic (unchanged) ───────────────────────────────────────────
 
 
-def get_intersection(categories_by_platform: dict[str, list[dict]]) -> list[tuple[str, int, list[Category]]]:
+def get_intersection(
+    categories_by_platform: dict[str, list[dict]],
+) -> list[tuple[str, int, list[Category]]]:
     """
     Compute the overlapping intersection of categories across platforms.
 
@@ -142,7 +204,6 @@ def get_intersection(categories_by_platform: dict[str, list[dict]]) -> list[tupl
             all_categories[key][0].add(platform)
             all_categories[key][1].append(cat)
 
-    # Filter: only include categories present on 2+ platforms
     result = []
     for norm_name, (platforms, cats) in all_categories.items():
         count = len(platforms)
@@ -158,23 +219,32 @@ def get_intersection(categories_by_platform: dict[str, list[dict]]) -> list[tupl
     return result
 
 
+# ─── Main discovery pipeline ──────────────────────────────────────────────────
+
+
 def discover_and_filter() -> list[tuple[str, int, list[Category]]]:
     """
-    Full discovery pipeline: scrape categories from all platforms,
-    normalize, and return only the overlapping intersection.
+    Full discovery pipeline:
+      - Z2U, G2G → FlareSolverr (with Selenium fallback)
+      - FunPay   → Selenium driver
 
     Returns list of (normalized_name, platform_count, [Category]).
     """
+    raw_categories: dict[str, list[dict]] = {}
+
+    # Cloudflare platforms → FlareSolverr
+    for platform in CLOUDFLARE_PLATFORMS:
+        raw_categories[platform] = _discover_via_flaresolverr(platform)
+        time.sleep(1.5)
+
+    # FunPay → Selenium
     driver = create_driver()
     try:
-        raw_categories = {
-            "z2u": discover_categories_z2u(driver),
-            "funpay": discover_categories_funpay(driver),
-            "g2g": discover_categories_g2g(driver),
-        }
-        return get_intersection(raw_categories)
+        raw_categories["funpay"] = _discover_funpay(driver)
     finally:
         try:
             driver.quit()
         except Exception:
             pass
+
+    return get_intersection(raw_categories)
