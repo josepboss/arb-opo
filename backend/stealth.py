@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from selenium.webdriver.chrome.options import Options as ChromeOptions
 from seleniumbase import Driver as SeleniumBaseDriver
 
 from config import HEADLESS, SELENIUM_TIMEOUT
@@ -137,6 +136,7 @@ def create_stealth_driver(config: Optional[StealthConfig] = None) -> SeleniumBas
         config.user_agent[:40], config.viewport_width, config.viewport_height
     )
 
+    # Build Chrome arguments list — SeleniumBase UC driver accepts these via `chrome_options`
     chrome_args = [
         f"--window-size={config.viewport_width},{config.viewport_height}",
         "--disable-blink-features=AutomationControlled",
@@ -154,21 +154,16 @@ def create_stealth_driver(config: Optional[StealthConfig] = None) -> SeleniumBas
     if HEADLESS:
         chrome_args.append("--headless=new")
 
-    chrome_options = ChromeOptions()
-    for arg in chrome_args:
-        chrome_options.add_argument(arg)
-
     driver = SeleniumBaseDriver(
         browser="chrome",
-        headless=HEADLESS,
-        headless2=HEADLESS,
-        uc=True,
-        agent=config.user_agent,
-        options=chrome_options,
+        headless2=HEADLESS,          # UC headless mode
+        uc=True,                     # Undetected ChromeDriver
+        agent=config.user_agent,     # User agent
+        chrome_options=chrome_args,  # Chrome arguments list
         disable_csp=True,
+        page_load_timeout=SELENIUM_TIMEOUT,
     )
 
-    driver.set_page_load_timeout(SELENIUM_TIMEOUT)
     driver.implicitly_wait(5)
 
     # Set viewport via CDP
@@ -220,11 +215,9 @@ def simulate_human_scroll(driver: SeleniumBaseDriver, steps: int = 3):
             return
 
         for i in range(steps):
-            # Random scroll distance (20-60% of viewport per step)
             step_pct = random.uniform(0.2, 0.6)
             target = page_height * (i + 1) / steps * step_pct
             driver.execute_script(f"window.scrollTo({{top: {target}, behavior: 'smooth'}})")
-            # Random pause between scrolls
             time.sleep(random.uniform(0.3, 1.2))
     except Exception as e:
         logger.debug("Scroll simulation failed (non-fatal): %s", e)
@@ -261,28 +254,23 @@ def navigate_with_stealth(
     4. Simulate human scroll + mouse movement
     5. Additional random delay
     """
-    # Pre-navigation: random wait before clicking or typing
     time.sleep(random.uniform(0.5, 1.5) + extra_delay)
 
     logger.debug("Navigating to %s", url)
     driver.get(url)
 
-    # Wait for page to be interactive
     try:
         driver.unsafe_js("return document.readyState === 'complete'")
     except Exception:
         pass
 
-    # Post-navigation: wait for dynamic content
     platform_delay = PLATFORM_DELAYS.get(platform, PLATFORM_DELAYS["default"])
     human_delay(platform_delay["min"] * 0.5, platform_delay["max"] * 0.8)
 
-    # Simulate human behavior
-    if random.random() > 0.3:  # 70% chance of scrolling
+    if random.random() > 0.3:
         simulate_human_scroll(driver, random.randint(2, 4))
 
-    if random.random() > 0.5:  # 50% chance of mouse movement
+    if random.random() > 0.5:
         simulate_mouse_movement(driver)
 
-    # Final random pause before extraction
     human_delay(0.5, 1.5)
