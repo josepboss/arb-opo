@@ -13,9 +13,6 @@ services:
       - CAPTCHA_SOLVER=none
       - TZ=UTC
     restart: unless-stopped
-    # Pass proxy env vars through to FlareSolverr if configured
-    # Uncomment and set PROXY_LIST if you want FlareSolverr itself to use proxies:
-    # - BROWSER_PROXY=
     networks:
       - arbitrage-net
 
@@ -50,16 +47,16 @@ services:
       - PROXY_BLACKLIST_THRESHOLD=3
 
       # Proxy Refresher (gfpcom/free-proxy-list)
-            - PROXY_SOURCE_URLS=https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxies.txt,https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-http.txt
-            - PROXY_REFRESH_INTERVAL=15
-            - MAX_VERIFIED_PROXIES=30
-            - PROXY_TEST_TIMEOUT=10
-            - PROXY_TEST_WORKERS=20
-            - VERIFIED_PROXIES_PATH=/app/data/verified_proxies.json
-      
-            # Selenium
-            - HEADLESS=true
-            - TZ=UTC
+      - PROXY_SOURCE_URLS=https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxies.txt,https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-http.txt
+      - PROXY_REFRESH_INTERVAL=15
+      - MAX_VERIFIED_PROXIES=30
+      - PROXY_TEST_TIMEOUT=10
+      - PROXY_TEST_WORKERS=20
+      - VERIFIED_PROXIES_PATH=/app/data/verified_proxies.json
+
+      # Selenium
+      - HEADLESS=true
+      - TZ=UTC
     volumes:
       - arbitrage_data:/app/data
     restart: unless-stopped
