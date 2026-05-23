@@ -33,13 +33,18 @@ logger = logging.getLogger(__name__)
 
 # ─── Config ────────────────────────────────────────────────────────────────────
 
-# Where to download proxy lists from (gfpcom/free-proxy-list raw GitHub URLs)
+# Where to download proxy lists from (GitHub raw URLs)
+# Source: gfpcom/free-proxy-list — if the repo has files at different paths,
+# override PROXY_SOURCE_URLS env var with the correct URLs.
+# Defaults to well-known, maintained free proxy lists.
 PROXY_SOURCE_URLS = [
     url.strip() for url in os.getenv(
         "PROXY_SOURCE_URLS",
-        "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxies.txt,"
-        "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-http.txt,"
-        "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-socks5.txt",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt,"
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt,"
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt,"
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt,"
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS.txt",
     ).split(",") if url.strip()
 ]
 

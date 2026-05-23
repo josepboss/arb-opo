@@ -41,13 +41,11 @@ services:
       - FLARESOLVERR_MAX_RETRIES=3
 
       # Proxy pool (comma-separated, optional)
-      # Format: http://user:pass@host:port
-      # If empty, FlareSolverr uses its own IP
       - PROXY_LIST=
       - PROXY_BLACKLIST_THRESHOLD=3
 
-      # Proxy Refresher (gfpcom/free-proxy-list)
-      - PROXY_SOURCE_URLS=https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxies.txt,https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-http.txt
+      # Proxy Refresher (free proxy lists from GitHub)
+      - PROXY_SOURCE_URLS=https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt,https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt,https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt,https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt,https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS.txt
       - PROXY_REFRESH_INTERVAL=15
       - MAX_VERIFIED_PROXIES=30
       - PROXY_TEST_TIMEOUT=10

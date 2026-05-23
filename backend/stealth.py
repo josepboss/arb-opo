@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from seleniumbase import Driver as SeleniumBaseDriver
 
 from config import HEADLESS, SELENIUM_TIMEOUT
@@ -153,13 +154,17 @@ def create_stealth_driver(config: Optional[StealthConfig] = None) -> SeleniumBas
     if HEADLESS:
         chrome_args.append("--headless=new")
 
+    chrome_options = ChromeOptions()
+    for arg in chrome_args:
+        chrome_options.add_argument(arg)
+
     driver = SeleniumBaseDriver(
         browser="chrome",
         headless=HEADLESS,
         headless2=HEADLESS,
         uc=True,
         agent=config.user_agent,
-        chrome_args=chrome_args,
+        options=chrome_options,
         disable_csp=True,
     )
 

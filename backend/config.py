@@ -67,8 +67,11 @@ CLOUDFLARE_PLATFORMS = {"z2u", "g2g"}
 # ─── Proxy Refresher (gfpcom/free-proxy-list) ──────────────────────────────────
 PROXY_SOURCE_URLS = os.getenv(
     "PROXY_SOURCE_URLS",
-    "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxies.txt,"
-    "https://raw.githubusercontent.com/gfpcom/free-proxy-list/main/proxy-list-http.txt",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt,"
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt,"
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt,"
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt,"
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS.txt",
 )
 PROXY_REFRESH_INTERVAL = int(os.getenv("PROXY_REFRESH_INTERVAL", "15"))
 MAX_VERIFIED_PROXIES = int(os.getenv("MAX_VERIFIED_PROXIES", "30"))
