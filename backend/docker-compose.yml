@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  arbitrage-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arbitrage-engine
+    ports:
+      - "2105:2105"
+    environment:
+      - ARBITRAGE_HOST=0.0.0.0
+      - ARBITRAGE_PORT=2105
+      - ARBITRAGE_DB_PATH=/app/data/arbitrage.db
+      - SCRAPE_INTERVAL_MINUTES=30
+      - HEADLESS=true
+      - TZ=UTC
+    volumes:
+      - arbitrage_data:/app/data
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+
+volumes:
+  arbitrage_data:
